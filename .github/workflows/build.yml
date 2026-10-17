@@ -28,9 +28,8 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: بناء الملف التنفيذي
-        run: |
-          pyinstaller --onefile --name RemoteLauncher --add-data "index.html;." server.py
+      - name: بناء الملف التنفيذي (بدون نافذة terminal)
+        run: pyinstaller --onefile --noconsole --name RemoteLauncher --add-data "index.html;." --hidden-import pystray._win32 server.py
 
       - name: رفع الـ EXE كـ Artifact
         uses: actions/upload-artifact@v4
