@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Remote Launcher</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #181b22;
+      --card: #232836;
+      --card-hover: #2c3244;
+      --accent: #4f8cff;
+      --ok: #2ecc71;
+      --bad: #e74c3c;
+      --text: #eef1f7;
+      --muted: #8a93a6;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, "Segoe UI", Tahoma, sans-serif;
+      overflow: hidden;
+    }
+
+    /* الأزرار الثابتة في يسار الشاشة */
+    .fixed-btn {
+      position: fixed;
+      left: 16px;
+      z-index: 10;
+      border: none;
+      border-radius: 14px;
+      background: var(--card);
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 600;
+      padding: 14px 20px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0,0,0,.35);
+      transition: background .15s, transform .1s;
+    }
+    .fixed-btn:active { transform: scale(.96); background: var(--card-hover); }
+    #settingsBtn { top: 16px; }
+    #aiBtn { bottom: 16px; background: var(--accent); }
+
+    /* اللوحة الرئيسية على اليمين */
+    main {
+      height: 100%;
+      padding: 20px 20px 20px 170px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      color: var(--muted);
+    }
+    .dot {
+      width: 12px; height: 12px; border-radius: 50%;
+      background: var(--bad);
+      box-shadow: 0 0 8px currentColor;
+    }
+    .dot.on { background: var(--ok); }
+
+    /* لوحة الإعدادات */
+    #settingsPanel {
+      background: var(--panel);
+      border-radius: 16px;
+      padding: 16px;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 2fr 1fr;
+    }
+    #settingsPanel.hidden { display: none; }
+    #settingsPanel label { grid-column: span 2; font-size: 14px; color: var(--muted); }
+    #settingsPanel input {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid #333a4d;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 16px;
+      direction: ltr;
+    }
+    #settingsPanel .wide { grid-column: span 2; }
+    #saveBtn {
+      padding: 12px;
+      border: none;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* شبكة التطبيقات */
+    #apps {
+      flex: 1;
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 14px;
+      align-content: start;
+      padding-bottom: 8px;
+    }
+    .app-btn {
+      min-height: 110px;
+      border: none;
+      border-radius: 18px;
+      background: var(--card);
+      color: var(--text);
+      font-size: 19px;
+      font-weight: 600;
+      padding: 18px;
+      cursor: pointer;
+      word-break: break-word;
+      transition: background .15s, transform .1s;
+    }
+    .app-btn:active { transform: scale(.97); background: var(--card-hover); }
+
+    .empty {
+      grid-column: 1 / -1;
+      text-align: center;
+      color: var(--muted);
+      padding: 40px 0;
+      font-size: 17px;
+    }
+
+    /* رسائل منبثقة */
+    #toast {
+      position: fixed;
+      bottom: 90px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #000c;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 12px;
+      font-size: 16px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .25s;
+    }
+    #toast.show { opacity: 1; }
+
+    /* الوضع الطولي على الهاتف أو iPad عمودياً */
+    @media (max-width: 700px), (orientation: portrait) {
+      main {
+        padding: 70px 14px 90px 14px;
+      }
+      #apps { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+      #settingsPanel { grid-template-columns: 1fr; }
+      #settingsPanel label, #settingsPanel .wide { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+
+  <button id="settingsBtn" class="fixed-btn">إعدادات</button>
+  <button id="aiBtn" class="fixed-btn">ai</button>
+
+  <main>
+    <div class="status-bar">
+      <span id="dot" class="dot"></span>
+      <span id="statusText">غير متصل</span>
+    </div>
+
+    <!-- الإعدادات: عنوان IP والمنفذ ورمز الاقتران -->
+    <div id="settingsPanel" class="hidden">
+      <label>عنوان IP للجهاز
+        <input id="host" type="text" placeholder="192.168.1.10" autocomplete="off">
+      </label>
+      <label>المنفذ
+        <input id="port" type="number" placeholder="8765">
+      </label>
+      <label class="wide">رمز الاقتران
+        <input id="token" type="text" placeholder="من نافذة الـ terminal" autocomplete="off">
+      </label>
+      <button id="saveBtn" class="wide">حفظ والاتصال</button>
+    </div>
+
+    <div id="apps">
+      <div class="empty">لا توجد تطبيقات بعد. اضغط "إعدادات" لإعادة التحميل.</div>
+    </div>
+  </main>
+
+  <div id="toast"></div>
+
+<script>
+  // ---------------------------------------------------------------
+  // الثوابت والعناصر
+  // ---------------------------------------------------------------
+  const DEFAULT_PORT = 8765;
+  const RETRY_MS = 2000;
+
+  const $ = id => document.getElementById(id);
+  const dot = $('dot');
+  const statusText = $('statusText');
+  const appsBox = $('apps');
+
+  let ws = null;            // اتصال WebSocket الحالي
+  let authed = false;       // هل تمت المصادقة بنجاح؟
+  let retryTimer = null;    // مؤقت إعادة المحاولة
+  let stopRetry = false;    // إيقاف إعادة المحاولة (مثلاً عند رمز خاطئ)
+
+  // ---------------------------------------------------------------
+  // الإعدادات المحفوظة في localStorage
+  // ---------------------------------------------------------------
+  function loadCfg() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('rl_cfg') || '{}');
+      return {
+        host: saved.host || location.hostname,
+        port: saved.port || DEFAULT_PORT,
+        token: saved.token || ''
+      };
+    } catch (e) {
+      return { host: location.hostname, port: DEFAULT_PORT, token: '' };
+    }
+  }
+
+  function saveCfg(cfg) {
+    try { localStorage.setItem('rl_cfg', JSON.stringify(cfg)); } catch (e) {}
+  }
+
+  // ---------------------------------------------------------------
+  // واجهة الحالة والرسائل
+  // ---------------------------------------------------------------
+  function setStatus(text, online) {
+    statusText.textContent = text;
+    dot.classList.toggle('on', online);
+  }
+
+  let toastTimer = null;
+  function toast(text) {
+    const el = $('toast');
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
+  }
+
+  // ---------------------------------------------------------------
+  // الاتصال وإعادة المحاولة
+  // ---------------------------------------------------------------
+  function scheduleRetry() {
+    if (!stopRetry) retryTimer = setTimeout(connect, RETRY_MS);
+  }
+
+  function connect() {
+    clearTimeout(retryTimer);
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+    const cfg = loadCfg();
+    if (!cfg.token) {
+      stopRetry = true;
+      setStatus('أدخل رمز الاقتران في الإعدادات', false);
+      return;
+    }
+
+    stopRetry = false;
+    authed = false;
+    setStatus('جارٍ الاتصال...', false);
+
+    try {
+      ws = new WebSocket(`ws://${cfg.host}:${cfg.port}`);
+    } catch (e) {
+      scheduleRetry();
+      return;
+    }
+
+    ws.onopen = () => {
+      // أول رسالة يجب أن تكون المصادقة
+      ws.send(JSON.stringify({ type: 'auth', token: cfg.token }));
+    };
+
+    ws.onmessage = e => {
+      try { handleMessage(JSON.parse(e.data)); } catch (err) {}
+    };
+
+    ws.onclose = () => {
+      authed = false;
+      ws = null;
+      if (!stopRetry) setStatus('غير متصل، جارٍ إعادة المحاولة...', false);
+      scheduleRetry();
+    };
+
+    ws.onerror = () => {}; // onclose يتولى المعالجة
+  }
+
+  // ---------------------------------------------------------------
+  // إرسال الأوامر واستقبال الردود
+  // ---------------------------------------------------------------
+  function send(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN && authed) {
+      ws.send(JSON.stringify(obj));
+      return true;
+    }
+    toast('غير متصل بالجهاز');
+    return false;
+  }
+
+  function handleMessage(msg) {
+    switch (msg.type) {
+      case 'auth_ok':
+        authed = true;
+        setStatus('متصل', true);
+        send({ type: 'list_apps' });
+        break;
+
+      case 'auth_failed':
+        stopRetry = true;
+        setStatus('رمز الاقتران غير صحيح', false);
+        if (ws) ws.close();
+        break;
+
+      case 'apps':
+        renderApps(msg.apps || []);
+        break;
+
+      case 'launched':
+        toast('تم تشغيل التطبيق');
+        break;
+
+      case 'error':
+        toast(msg.message || 'حدث خطأ');
+        break;
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // عرض التطبيقات
+  // ---------------------------------------------------------------
+  function renderApps(apps) {
+    appsBox.innerHTML = '';
+    if (apps.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'لم يتم العثور على تطبيقات';
+      appsBox.appendChild(empty);
+      return;
+    }
+    for (const app of apps) {
+      const btn = document.createElement('button');
+      btn.className = 'app-btn';
+      btn.textContent = app.name;   // textContent يمنع أي حقن HTML
+      btn.onclick = () => send({ type: 'launch', path: app.path });
+      appsBox.appendChild(btn);
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // الأزرار
+  // ---------------------------------------------------------------
+  $('settingsBtn').onclick = () => {
+    $('settingsPanel').classList.toggle('hidden');
+    // إعادة تحميل قائمة التطبيقات، أو إعادة الاتصال إن لزم الأمر
+    if (ws && authed) send({ type: 'list_apps' });
+    else connect();
+  };
+
+  $('aiBtn').onclick = () => {
+    window.open('https://gemini.google.com', '_blank', 'noopener');
+  };
+
+  $('saveBtn').onclick = () => {
+    const cfg = {
+      host: $('host').value.trim() || location.hostname,
+      port: parseInt($('port').value, 10) || DEFAULT_PORT,
+      token: $('token').value.trim()
+    };
+    saveCfg(cfg);
+
+    // إغلاق الاتصال القديم دون تفعيل إعادة المحاولة
+    if (ws) {
+      const old = ws;
+      ws = null;
+      old.onclose = null;
+      old.close();
+    }
+    connect();
+    $('settingsPanel').classList.add('hidden');
+  };
+
+  // ---------------------------------------------------------------
+  // التهيئة
+  // ---------------------------------------------------------------
+  (function init() {
+    const cfg = loadCfg();
+    $('host').value = cfg.host;
+    $('port').value = cfg.port;
+    $('token').value = cfg.token;
+    connect();
+  })();
+</script>
+</body>
+</html>
