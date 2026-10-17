@@ -49,13 +49,13 @@
     .ph { width: 64px; height: 64px; border-radius: 14px; background: #343b4f; }
     .empty { grid-column: 1 / -1; color: var(--muted); font-size: 17px; text-align: center; padding: 40px 0; }
 
-    /* نافذة الإعدادات */
-    #overlay {
+    /* النوافذ المنبثقة */
+    .overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 20;
       display: none; align-items: center; justify-content: center; padding: 16px;
     }
-    #overlay.show { display: flex; }
-    #modal {
+    .overlay.show { display: flex; }
+    .modal {
       background: var(--panel); border-radius: 20px; width: min(760px, 100%); max-height: 100%;
       display: flex; flex-direction: column; overflow: hidden;
     }
@@ -88,6 +88,21 @@
     }
     .pick.sel .chk { display: flex; background: var(--accent); }
 
+    /* واجهة الذكاء الاصطناعي */
+    #aiLog {
+      min-height: 280px; max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+      background: var(--bg); border-radius: 14px; padding: 12px;
+    }
+    .msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; line-height: 1.6; font-size: 16px; }
+    .msg.user { align-self: flex-start; background: var(--accent); color: #fff; }
+    .msg.bot { align-self: flex-end; background: var(--card); }
+    .msg.err { align-self: flex-end; background: #4a1f1f; color: #ffb4b4; }
+    #aiInputRow { display: flex; gap: 10px; }
+    #aiInput {
+      flex: 1; padding: 12px; border-radius: 12px; border: 1px solid #333a4d;
+      background: var(--bg); color: var(--text); font-size: 16px;
+    }
+
     #toast {
       position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
       background: #000c; color: #fff; padding: 12px 20px; border-radius: 12px; font-size: 16px;
@@ -113,11 +128,12 @@
     <div id="grid"></div>
   </main>
 
-  <div id="overlay">
-    <div id="modal">
+  <!-- نافذة الإعدادات -->
+  <div id="settingsOverlay" class="overlay">
+    <div class="modal">
       <div class="mhead">
         <span>الإعدادات</span>
-        <button class="btn" id="closeBtn">إغلاق</button>
+        <button class="btn" id="closeSettingsBtn">إغلاق</button>
       </div>
       <div class="mbody">
         <div class="field"><label>عنوان IP للجهاز</label>
@@ -136,18 +152,53 @@
     </div>
   </div>
 
+  <!-- نافذة الذكاء الاصطناعي (Gemini) -->
+  <div id="aiOverlay" class="overlay">
+    <div class="modal">
+      <div class="mhead">
+        <span>Gemini</span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn" id="changeKeyBtn">تغيير المفتاح</button>
+          <button class="btn" id="closeAiBtn">إغلاق</button>
+        </div>
+      </div>
+
+      <!-- عرض إدخال المفتاح (أول مرة) -->
+      <div class="mbody" id="keyView">
+        <div class="field"><label>مفتاح Gemini API</label>
+          <input id="geminiKeyInput" autocomplete="off" placeholder="AIza...">
+        </div>
+        <div class="hint">احصل على المفتاح من aistudio.google.com ثم الصقه هنا. يُحفظ في الآيباد فقط.</div>
+        <div><button class="btn primary" id="saveKeyBtn">حفظ المفتاح</button></div>
+      </div>
+
+      <!-- عرض المحادثة -->
+      <div class="mbody" id="chatView" style="display:none;">
+        <div id="aiLog"></div>
+        <div id="aiInputRow">
+          <input id="aiInput" autocomplete="off" placeholder="اكتب رسالتك...">
+          <button class="btn primary" id="sendAiBtn">إرسال</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="toast"></div>
 
 <script>
   const DEFAULT_PORT = 8765;
   const RETRY_MS = 2000;
+  const GEMINI_MODEL = 'gemini-2.5-flash';   // غيّره إن أردت نموذجاً آخر
   const $ = id => document.getElementById(id);
 
-  let cfg = loadCfg();                 // إعدادات الاتصال
-  let pinned = loadPinned();           // null = أول مرة، وإلا مصفوفة مسارات
-  let apps = [];                       // كل التطبيقات القادمة من الجهاز
-  let selection = new Set();           // اختيار مؤقت داخل نافذة الإعدادات
+  let cfg = loadCfg();                  // إعدادات الاتصال
+  let pinned = loadPinned();            // null = أول مرة، وإلا مصفوفة مسارات
+  let apps = [];                        // كل التطبيقات القادمة من الجهاز
+  let selection = new Set();            // اختيار مؤقت داخل نافذة الإعدادات
   let ws = null, authed = false, retryTimer = null, stopRetry = false;
+
+  let geminiKey = localStorage.getItem('rl_gemini_key') || '';
+  let chatHist = [];                    // سجل المحادثة لإرساله مع كل طلب
 
   // ---------------- التخزين ----------------
   function loadCfg() {
@@ -236,7 +287,7 @@
 
   function onAppsLoaded() {
     renderGrid();
-    if ($('overlay').classList.contains('show')) renderPicker();
+    if ($('settingsOverlay').classList.contains('show')) renderPicker();
     else if (pinned === null && apps.length) openSettings();   // أول مرة: اطلب الاختيار
   }
 
@@ -287,12 +338,11 @@
     $('pickHint').textContent = pinned === null
       ? 'أول مرة: اختر التطبيقات اللي بدك تظهر في الشاشة الوسطى'
       : 'اختر التطبيقات اللي بدك تظهر في الشاشة الوسطى';
-    $('overlay').classList.add('show');
+    $('settingsOverlay').classList.add('show');
     renderPicker();
     if (authed) send({ type: 'list_apps' });
   }
-
-  function closeSettings() { $('overlay').classList.remove('show'); }
+  function closeSettings() { $('settingsOverlay').classList.remove('show'); }
 
   function renderPicker() {
     const box = $('picker');
@@ -320,14 +370,71 @@
     }
   }
 
+  // ---------------- نافذة Gemini ----------------
+  function openAi() {
+    $('aiOverlay').classList.add('show');
+    renderAi();
+  }
+  function closeAi() { $('aiOverlay').classList.remove('show'); }
+
+  function renderAi() {
+    const hasKey = !!geminiKey;
+    $('keyView').style.display = hasKey ? 'none' : 'grid';
+    $('chatView').style.display = hasKey ? 'grid' : 'none';
+    if (hasKey && $('aiLog').childElementCount === 0) {
+      addMsg('bot', 'أهلاً! اسألني أي شي.');
+    }
+  }
+
+  function addMsg(kind, text) {
+    const d = document.createElement('div');
+    d.className = 'msg ' + kind;
+    d.textContent = text;     // textContent يمنع أي حقن HTML
+    $('aiLog').appendChild(d);
+    $('aiLog').scrollTop = $('aiLog').scrollHeight;
+    return d;
+  }
+
+  async function askGemini() {
+    const text = $('aiInput').value.trim();
+    if (!text) return;
+    $('aiInput').value = '';
+    addMsg('user', text);
+    chatHist.push({ role: 'user', parts: [{ text }] });
+
+    const thinking = addMsg('bot', '...');
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: chatHist })
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = (data.error && data.error.message) || ('خطأ ' + res.status);
+        throw new Error(msg);
+      }
+      const reply = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+      chatHist.push({ role: 'model', parts: [{ text: reply }] });
+      thinking.textContent = reply || '(ما في رد)';
+    } catch (err) {
+      chatHist.pop();                       // نحذف رسالة المستخدم الفاشلة
+      thinking.className = 'msg err';
+      thinking.textContent = 'فشل الطلب: ' + err.message;
+    }
+    $('aiLog').scrollTop = $('aiLog').scrollHeight;
+  }
+
   // ---------------- الأزرار ----------------
   $('settingsBtn').onclick = () => {
     openSettings();
     if (!authed) connect();
   };
-  $('closeBtn').onclick = closeSettings;
+  $('closeSettingsBtn').onclick = closeSettings;
   $('reloadBtn').onclick = () => { if (authed) send({ type: 'list_apps' }); else connect(); };
-  $('aiBtn').onclick = () => window.open('https://gemini.google.com', '_blank', 'noopener');
 
   $('saveBtn').onclick = () => {
     cfg = {
@@ -349,6 +456,23 @@
     }
     connect();
   };
+
+  $('aiBtn').onclick = openAi;
+  $('closeAiBtn').onclick = closeAi;
+  $('changeKeyBtn').onclick = () => {
+    $('geminiKeyInput').value = geminiKey;
+    $('keyView').style.display = 'grid';
+    $('chatView').style.display = 'none';
+  };
+  $('saveKeyBtn').onclick = () => {
+    const k = $('geminiKeyInput').value.trim();
+    if (!k) { toast('أدخل المفتاح أولاً'); return; }
+    geminiKey = k;
+    try { localStorage.setItem('rl_gemini_key', k); } catch (e) {}
+    renderAi();
+  };
+  $('sendAiBtn').onclick = askGemini;
+  $('aiInput').addEventListener('keydown', e => { if (e.key === 'Enter') askGemini(); });
 
   // ---------------- التهيئة ----------------
   renderGrid();
