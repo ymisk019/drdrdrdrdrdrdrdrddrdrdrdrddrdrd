@@ -6,7 +6,6 @@ RemoteLauncher - خادم تشغيل التطبيقات عن بعد
 """
 
 import asyncio
-import base64  # noqa: F401 (متاح للتوسعة)
 import http.server
 import json
 import os
@@ -24,28 +23,32 @@ import websockets
 # ----------------------------------------------------------------------------
 # الإعدادات
 # ----------------------------------------------------------------------------
-HOST = "0.0.0.0"
-WS_PORT = 8765
-HTTP_PORT = 8080
-AUTH_TIMEOUT = 10
+HOST = "0.0.0.0"              # الاستماع على كل واجهات الشبكة المحلية
+WS_PORT = 8765                # منفذ WebSocket للأوامر
+HTTP_PORT = 8080              # منفذ HTTP لخدمة صفحة index.html
+AUTH_TIMEOUT = 10             # ثواني مهلة المصادقة
 
-# رمز الاقتران: يتولد عشوائياً في كل تشغيل ولا يُكتب في الكود
+# رمز الاقتران: يتولد عشوائياً في كل تشغيل ولا يُكتب في الكود أبداً
 PAIRING_TOKEN = secrets.token_urlsafe(16)
 
 ALLOWED_APPS: dict[str, str] = {}   # مفتاح مُطبَّع -> المسار الأصلي
 ICON_CACHE: dict[str, str] = {}     # مسار الاختصار -> PNG base64 (أو "" عند الفشل)
-HANDLERS = {}
-EXCLUDED_KEYWORDS = ("uninstall", "uninstaller", "readme", "read me", "help")
-CREATE_NO_WINDOW = 0x08000000       # يمنع ظهور نافذة PowerShell
+HANDLERS = {}                       # نوع الرسالة -> الدالة المسؤولة عنها
 
-SERVER_LOOP = None
-STOP_EVENT = None
+# كلمات تُستبعد من أسماء الاختصارات لأنها غير مفيدة للتشغيل
+EXCLUDED_KEYWORDS = ("uninstall", "uninstaller", "readme", "read me", "help")
+
+CREATE_NO_WINDOW = 0x08000000       # يمنع ظهور نافذة PowerShell عند استخراج الأيقونات
+
+SERVER_LOOP = None                  # حلقة الأحداث الخاصة بخادم WebSocket
+STOP_EVENT = None                   # حدث إيقاف خادم WebSocket
 
 
 # ----------------------------------------------------------------------------
 # مسارات الملفات (تعمل في السكربت العادي و PyInstaller)
 # ----------------------------------------------------------------------------
 def resource_dir() -> Path:
+    # عند التجميع بـ PyInstaller تُفكّ الملفات المضمنة داخل sys._MEIPASS
     if hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)
     return Path(__file__).resolve().parent
@@ -69,11 +72,12 @@ def start_menu_dirs() -> list[Path]:
 
 
 def normalize(path: str) -> str:
+    # توحيد المسار لمقارنة آمنة (حالة الأحرف والفواصل)
     return os.path.normcase(os.path.normpath(path))
 
 
 def scan_apps() -> list[dict]:
-    """يجمع اختصارات .lnk بعد الفلترة."""
+    """يمرّ على مجلدات ابدأ ويعيد اختصارات .lnk فقط بعد الفلترة."""
     found: dict[str, dict] = {}
     for base in start_menu_dirs():
         if not base.is_dir():
@@ -81,7 +85,7 @@ def scan_apps() -> list[dict]:
         for root, _dirs, files in os.walk(base):
             for filename in files:
                 lower = filename.lower()
-                if not lower.endswith(".lnk"):
+                if not lower.endswith(".lnk"):          # نعتمد على .lnk فقط
                     continue
                 if any(k in lower for k in EXCLUDED_KEYWORDS):
                     continue
@@ -93,9 +97,9 @@ def scan_apps() -> list[dict]:
 
 
 # ----------------------------------------------------------------------------
-# استخراج الأيقونات عبر PowerShell (مرة واحدة لكل تطبيق، ثم تُحفظ في الذاكرة)
+# استخراج الأيقونات عبر PowerShell (مرة واحدة لكل تطبيق ثم تُحفظ في الذاكرة)
 # ----------------------------------------------------------------------------
-# السكربت يقرأ قائمة المسارات من ملف JSON (UTF-8) ويطبع سطراً لكل مسار: base64 أو سطر فارغ
+# السكربت يقرأ قائمة المسارات من ملف JSON ويطبع سطراً لكل مسار: base64 أو سطر فارغ
 PS_SCRIPT = r"""
 Add-Type -AssemblyName System.Drawing
 $paths = Get-Content -Raw -Encoding UTF8 -LiteralPath $args[0] | ConvertFrom-Json
@@ -143,7 +147,7 @@ def fetch_icons(paths: list[str]) -> None:
 async def refresh_allowed(with_icons: bool = False) -> list[dict]:
     """يعيد بناء القائمة المسموحة، ويستخرج الأيقونات عند الطلب."""
     global ALLOWED_APPS
-    apps = await asyncio.to_thread(scan_apps)
+    apps = await asyncio.to_thread(scan_apps)   # لا نحجب حلقة الأحداث أثناء المسح
     ALLOWED_APPS = {normalize(a["path"]): a["path"] for a in apps}
     if with_icons:
         await asyncio.to_thread(fetch_icons, [a["path"] for a in apps])
@@ -184,6 +188,7 @@ async def handle_launch(ws, msg):
         return {"type": "error", "message": "مسار غير صالح"}
 
     key = normalize(path)
+    # إن لم يكن المسار في القائمة نعيد المسح مرة واحدة قبل الرفض
     if key not in ALLOWED_APPS:
         await refresh_allowed()
     if key not in ALLOWED_APPS:
@@ -191,7 +196,8 @@ async def handle_launch(ws, msg):
         return {"type": "error", "message": "التطبيق غير مسموح"}
 
     try:
-        os.startfile(ALLOWED_APPS[key])   # نشغّل المسار المحفوظ من المسح، لا نص العميل
+        # نشغّل المسار المحفوظ من المسح، لا النص القادم من العميل
+        os.startfile(ALLOWED_APPS[key])
     except OSError as exc:
         return {"type": "error", "message": f"فشل التشغيل: {exc}"}
 
@@ -203,6 +209,7 @@ async def handle_launch(ws, msg):
 # المصادقة ومعالجة الاتصال
 # ----------------------------------------------------------------------------
 async def authenticate(ws) -> bool:
+    """أول رسالة يجب أن تكون {"type": "auth", "token": "..."}، وإلا يُرفض الاتصال."""
     try:
         raw = await asyncio.wait_for(ws.recv(), timeout=AUTH_TIMEOUT)
         msg = json.loads(raw)
@@ -214,6 +221,7 @@ async def authenticate(ws) -> bool:
         return False
 
     token = str(msg.get("token", ""))
+    # compare_digest بالبايتات لتفادي أخطاء الأحرف غير ASCII ومقارنة آمنة من هجمات التوقيت
     if secrets.compare_digest(token.encode("utf-8"), PAIRING_TOKEN.encode("utf-8")):
         await send_json(ws, {"type": "auth_ok"})
         return True
@@ -224,6 +232,7 @@ async def authenticate(ws) -> bool:
 
 
 async def dispatch(ws, raw):
+    """يحوّل كل رسالة إلى الدالة المناسبة ويرسل الرد إن وُجد."""
     try:
         msg = json.loads(raw)
     except json.JSONDecodeError:
@@ -274,7 +283,7 @@ class IndexHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
     def log_message(self, format, *args):
-        pass
+        pass  # إسكات سجل الطلبات
 
 
 def run_http_server():
@@ -307,6 +316,7 @@ def stop_ws():
 # أدوات مساعدة
 # ----------------------------------------------------------------------------
 def get_local_ip() -> str:
+    """يحصل على عنوان IP المحلي (بدون إرسال بيانات فعلياً)."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("10.255.255.255", 1))
@@ -315,12 +325,13 @@ def get_local_ip() -> str:
         return "127.0.0.1"
 
 
-def save_token_file():
+def save_token_file() -> Path:
     """يحفظ رمز الاقتران في ملف، لأن النسخة النهائية بدون نافذة terminal."""
     base = Path(os.environ.get("APPDATA", str(Path.home()))) / "RemoteLauncher"
     base.mkdir(parents=True, exist_ok=True)
-    (base / "token.txt").write_text(PAIRING_TOKEN, encoding="utf-8")
-    return base / "token.txt"
+    token_file = base / "token.txt"
+    token_file.write_text(PAIRING_TOKEN, encoding="utf-8")
+    return token_file
 
 
 def make_tray_image():
@@ -333,7 +344,7 @@ def make_tray_image():
 
 
 def run_tray(ip: str, token_file: Path):
-    """أيقونة شريط المهام. يعمل على الخيط الرئيسي وتبقى حية حتى تختار خروج."""
+    """أيقونة شريط المهام. تبقى حية على الخيط الرئيسي حتى يختار المستخدم خروج."""
     import pystray
 
     def show_token(icon, item):
